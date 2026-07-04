@@ -1,17 +1,18 @@
 # Jargon Buster - A simple Streamlit app that explains legal/medical text in plain language.
 # Run with: streamlit run app.py
 #
-# CHANGED: This app now uses Groq (free tier, no credit card) instead of Google Gemini.
-# Groq provides fast access to open-source models like Llama 3 via a simple chat API.
+# Uses Groq (free tier, no credit card) for fast access to open-source models like Llama 3.
+# Users can paste text OR upload a .txt / .pdf document.
 
+import io
 import os
 
 from groq import Groq
 import streamlit as st
+from PyPDF2 import PdfReader
 
 # ---------------------------------------------------------------------------
 # Page setup: title, icon, and layout shown in the browser tab and header.
-# (Unchanged from the Gemini version.)
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="Jargon Buster",
@@ -22,14 +23,13 @@ st.set_page_config(
 # Main heading and short description for users.
 st.title("Jargon Buster")
 st.markdown(
-    "Paste confusing legal or medical text below and get a simple explanation "
-    "plus your next action step."
+    "Paste confusing legal or medical text below, or upload a document, "
+    "and get a simple explanation plus your next action step."
 )
 
 # ---------------------------------------------------------------------------
 # API key: read from environment variable, or let the user enter it in the sidebar.
-# CHANGED: Uses GROQ_API_KEY instead of GOOGLE_API_KEY.
-# Get a free key at https://console.groq.com/keys (no credit card required).
+# Uses GROQ_API_KEY. Get a free key at https://console.groq.com/keys (no credit card required).
 # ---------------------------------------------------------------------------
 api_key = os.environ.get("GROQ_API_KEY")
 
@@ -44,9 +44,28 @@ with st.sidebar:
     else:
         st.success("API key loaded from environment.")
 
+
+def extract_text_from_upload(uploaded_file) -> str:
+    """Read plain text from a .txt file or extract text from every page of a .pdf."""
+    file_bytes = uploaded_file.read()
+
+    if uploaded_file.name.lower().endswith(".txt"):
+        # .txt files are already plain text — decode bytes to a string.
+        return file_bytes.decode("utf-8")
+
+    if uploaded_file.name.lower().endswith(".pdf"):
+        # PyPDF2 reads the PDF from memory and pulls text from each page.
+        reader = PdfReader(io.BytesIO(file_bytes))
+        page_texts = []
+        for page in reader.pages:
+            page_texts.append(page.extract_text() or "")
+        return "\n".join(page_texts)
+
+    return ""
+
+
 # ---------------------------------------------------------------------------
-# User input: large text box for the document they want explained.
-# (Unchanged from the Gemini version.)
+# User input: paste text OR upload a .txt / .pdf file.
 # ---------------------------------------------------------------------------
 document_text = st.text_area(
     "Paste your document here",
@@ -54,49 +73,59 @@ document_text = st.text_area(
     placeholder="Paste legal letters, medical forms, insurance docs, etc.",
 )
 
+uploaded_file = st.file_uploader(
+    "Or upload a document",
+    type=["txt", "pdf"],
+    help="Upload a .txt or .pdf file instead of pasting text.",
+)
+
 # Button to trigger the explanation (only runs when clicked).
 submit_clicked = st.button("Explain it simply", type="primary")
 
 # ---------------------------------------------------------------------------
-# When the user clicks submit, send the text to Groq and show the result.
-# CHANGED: Groq uses a "chat completions" API (messages with roles) instead of
-# Gemini's single generate_content() call. We send one user message with the prompt.
+# When the user clicks submit, gather text (from upload or text area) and send to Groq.
 # ---------------------------------------------------------------------------
 if submit_clicked:
     # Validate inputs before calling the API.
     if not api_key:
         st.error("Please enter your Groq API key in the sidebar.")
-    elif not document_text.strip():
-        st.warning("Please paste some text to explain.")
     else:
-        # CHANGED: Create a Groq client (replaces genai.configure() + GenerativeModel).
-        client = Groq(api_key=api_key)
-
-        # The exact prompt you requested, with the user's document appended.
-        prompt = (
-            "Explain this document to me like I am 5 years old and tell me "
-            "what my exact next action step should be.\n\n"
-            f"Document:\n{document_text}"
-        )
-
-        # Show a spinner while waiting for the API response.
-        with st.spinner("Reading your document and simplifying it..."):
+        # Prefer uploaded file content; fall back to the text area if no file was uploaded.
+        if uploaded_file is not None:
             try:
-                # Call Groq's chat API with llama-3.1-8b-instant (replaces decommissioned llama3-8b-8192).
-                # response.choices[0].message.content holds the AI's reply text.
-                response = client.chat.completions.create(
-                    model="llama-3.1-8b-instant",
-                    messages=[
-                        {"role": "user", "content": prompt},
-                    ],
-                )
-                explanation = response.choices[0].message.content
-
-                st.subheader("Your simple explanation")
-                st.markdown(explanation)
-
+                document_text = extract_text_from_upload(uploaded_file)
             except Exception as e:
-                st.error(f"Something went wrong: {e}")
-                st.info(
-                    "Check that your Groq API key is valid and that you have internet access."
-                )
+                st.error(f"Could not read the uploaded file: {e}")
+                document_text = ""
+        # else: document_text already holds whatever the user pasted
+
+        if not document_text.strip():
+            st.warning("Please paste some text or upload a .txt / .pdf file to explain.")
+        else:
+            client = Groq(api_key=api_key)
+
+            # The exact prompt, with the document text appended.
+            prompt = (
+                "Explain this document to me like I am 5 years old and tell me "
+                "what my exact next action step should be.\n\n"
+                f"Document:\n{document_text}"
+            )
+
+            with st.spinner("Reading your document and simplifying it..."):
+                try:
+                    response = client.chat.completions.create(
+                        model="llama-3.1-8b-instant",
+                        messages=[
+                            {"role": "user", "content": prompt},
+                        ],
+                    )
+                    explanation = response.choices[0].message.content
+
+                    st.subheader("Your simple explanation")
+                    st.markdown(explanation)
+
+                except Exception as e:
+                    st.error(f"Something went wrong: {e}")
+                    st.info(
+                        "Check that your Groq API key is valid and that you have internet access."
+                    )
