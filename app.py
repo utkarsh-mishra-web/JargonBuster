@@ -6,8 +6,10 @@
 
 import io
 import os
+import tempfile
 
 from groq import Groq
+from gtts import gTTS
 import streamlit as st
 from PyPDF2 import PdfReader
 
@@ -123,6 +125,31 @@ if submit_clicked:
 
                     st.subheader("Your simple explanation")
                     st.markdown(explanation)
+
+                    # Convert the explanation to speech and play it in the browser.
+                    with st.spinner("Creating audio..."):
+                        tmp_path = None
+                        try:
+                            with tempfile.NamedTemporaryFile(
+                                suffix=".mp3", delete=False
+                            ) as tmp_file:
+                                tmp_path = tmp_file.name
+
+                            # gTTS sends the explanation text to Google TTS and saves an MP3.
+                            tts = gTTS(text=explanation, lang="en")
+                            tts.save(tmp_path)
+
+                            # Read the file into memory so we can delete the temp file safely.
+                            with open(tmp_path, "rb") as audio_file:
+                                audio_bytes = audio_file.read()
+
+                            st.subheader("Listen to your explanation")
+                            st.audio(audio_bytes, format="audio/mp3")
+                        except Exception as tts_error:
+                            st.warning(f"Could not create audio: {tts_error}")
+                        finally:
+                            if tmp_path and os.path.exists(tmp_path):
+                                os.remove(tmp_path)
 
                 except Exception as e:
                     st.error(f"Something went wrong: {e}")
